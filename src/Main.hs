@@ -1,3 +1,4 @@
+{-# LANGUAGE ScopedTypeVariables #-}
 
 module Main where
 
@@ -157,11 +158,11 @@ whatsYourName name =
     (`runCont` id) $ do
         -- Binds response to the result of the following callCC block,
         -- binds exit to the continuation.
-        response <- callCC $ \exit -> do
+        response <- callCC''''' $ \exit -> do
             -- Validates name. This approach illustrates advantage of
             -- using callCC over return. We pass the continuation to
-            -- validateName, and interrupt execution of the Cont block
-            -- from inside of validateName.
+            -- validateName, and ***interrupt execution of the Cont block
+            -- from inside of validateName***.
             validateName name exit
             -- Returns the welcome message from the callCC block.
             -- This line is not executed if validateName fails.
@@ -169,9 +170,50 @@ whatsYourName name =
         -- Returns from the Cont block.
         return response
   where
-    validateName :: String -> (String -> Cont a ()) -> Cont a ()
+    validateName :: String -> (String -> Cont String ()) -> Cont String ()
     validateName name exit =
         when (null name) (exit "You forgot to tell me your name!")
+
+
+callCC' :: ((a -> ContT r m b) -> ContT r m a) -> ContT r m a
+callCC' f = ContT $ \c ->
+                runContT (f (\a -> ContT $ \_ -> c a)) c
+
+callCC'' :: ((a -> ContT r m b) -> ContT r m a) -> ContT r m a
+callCC'' f = ContT $ \c -> do
+                let result = f (\a -> ContT $ \_ -> c a)
+                runContT result c
+
+callCC''' :: ((a -> Cont r b) -> Cont r a) -> Cont r a
+callCC''' f = cont $ \c -> do
+                let result = f (\a -> cont $ \_ -> c a)
+                runCont result c
+
+callCC'''' :: forall a b r . ((a -> Cont r b) -> Cont r a) -> Cont r a
+callCC'''' exitContFunc = cont normalFunction
+  where
+    normalFunction :: (a -> r) -> r
+    normalFunction finalChanger = runCont resultCont finalChanger
+      where
+        resultCont :: Cont r a
+        resultCont = exitContFunc inner
+          where
+            inner :: a -> Cont r b
+            inner a = cont throwAwayResultFunc
+              where
+                throwAwayResultFunc :: (b -> r) -> r
+                throwAwayResultFunc _ = finalChanger a
+
+callCC''''' :: forall a b r . ((a -> Cont r b) -> Cont r a) -> Cont r a
+callCC''''' exitContFunc = cont normalFunction
+  where
+    normalFunction :: (a -> r) -> r
+    normalFunction finalChanger = runCont (exitContFunc inner) finalChanger
+      where
+        inner :: a -> Cont r b
+        inner a = cont $ \_ -> finalChanger a
+
+-- callCC'' = \c ->
 
 main :: IO ()
 main = do
