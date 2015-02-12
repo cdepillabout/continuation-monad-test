@@ -4,6 +4,10 @@ module Main where
 import Control.Monad.Cont
 import Prelude hiding (break)
 
+------------------------------------------------------------------------------
+-- fibonacci with continuations
+------------------------------------------------------------------------------
+
 fibWith2Where :: Integer -> (Integer -> Integer) -> Integer
 fibWith2Where 0 c = c 0
 fibWith2Where 1 c = c 1
@@ -57,6 +61,10 @@ fibWithDoBad n = do
         y <- cont $ const "whatwhat"
         return (x+y)
 
+------------------------------------------------------------------------------
+-- factorial with continuations
+------------------------------------------------------------------------------
+
 factorial :: Integer -> Integer
 factorial 0 = 1
 factorial n = n * factorial (n-1)
@@ -71,6 +79,9 @@ factRealCont n = do
         m <- factRealCont (n - 1)
         return $ m * n
 
+------------------------------------------------------------------------------
+-- for...in loops in haskell
+------------------------------------------------------------------------------
 
 -- Implement for...in loops in haskell with breaking and continuing.
 loopBreakOuter :: ContT () IO ()
@@ -130,6 +141,38 @@ for_in xs f = callCC $ \breakCont ->
             let label = Label (continueCont ()) (breakCont ())
             in f label x
 
+
+-----------------------------------------------------------------------------
+-- callcc examples
+-----------------------------------------------------------------------------
+
+-- Returns a string depending on the length of the name parameter.
+-- If the provided string is empty, returns an error.
+-- Otherwise, returns a welcome message.
+whatsYourName :: String -> String
+whatsYourName name =
+    -- Runs an anonymous Cont block and extracts value from it with
+    -- (`runCont` id). Here id is the continuation, passed to the Cont
+    -- block.
+    (`runCont` id) $ do
+        -- Binds response to the result of the following callCC block,
+        -- binds exit to the continuation.
+        response <- callCC $ \exit -> do
+            -- Validates name. This approach illustrates advantage of
+            -- using callCC over return. We pass the continuation to
+            -- validateName, and interrupt execution of the Cont block
+            -- from inside of validateName.
+            validateName name exit
+            -- Returns the welcome message from the callCC block.
+            -- This line is not executed if validateName fails.
+            return $ "Welcome, " ++ name ++ "!"
+        -- Returns from the Cont block.
+        return response
+  where
+    validateName :: String -> (String -> Cont a ()) -> Cont a ()
+    validateName name exit =
+        when (null name) (exit "You forgot to tell me your name!")
+
 main :: IO ()
 main = do
         print $ fibWith2Where 10 id
@@ -144,3 +187,5 @@ main = do
         print $ runCont (factRealCont 10) (const "hello")
         -- runContT loopBreakForIt return
         runContT loopBreakOuter return
+        print $ whatsYourName "myname"
+        print $ whatsYourName ""
