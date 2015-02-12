@@ -71,13 +71,8 @@ factRealCont n = do
         m <- factRealCont (n - 1)
         return $ m * n
 
-loopLookForIt :: ContT () IO ()
-loopLookForIt =
-    for_in [0..100] $ \loop x -> do
-        when (x `mod` 3 == 1) $ continue loop
-        when (x `div` 17 == 2) $ break loop
-        lift $ print x
 
+-- Implement for...in loops in haskell with breaking and continuing.
 loopBreakOuter :: ContT () IO ()
 loopBreakOuter =
     for_in [1,2,3] $ \outer x -> do
@@ -86,43 +81,54 @@ loopBreakOuter =
             break outer
         lift $ print x
 
-data (MonadCont m) => Label m = Label { continue :: m ()
-                                      , break :: m ()
-                                      }
+loopLookForIt :: ContT () IO ()
+loopLookForIt =
+    for_in [0..100] $ \loop x -> do
+        when (x `mod` 3 == 1) $ continue loop
+        when (x `div` 17 == 2) $ break loop
+        lift $ print x
 
-data Label' = Label' { continue' :: ContT () IO ()
-                     , break' :: ContT () IO ()
-                     }
+-- Since continuations represent, well, "continuations" to the program
+-- flow, we should have some notion of a continuation that functions as
+-- break, as well as a continuation that functions as continue. We will
+-- store the continuations that correspond to breaking and continuing
+-- inside a loop "label", which is the first argument of our hanging
+-- lambda.  It's sufficient then to call continue label or break label
+-- inside the monad to extract and follow the continuation.
+data Label = Label { continue :: ContT () IO ()
+                   , break :: ContT () IO ()
+                   }
 
-for_in' :: (Monad m) => [a] -> (a -> m ()) -> m ()
+-- If we didn't have to supply any of the continuations, this is actually
+-- just a flipped mapM_.
+for_in' :: [a] -> (a -> ContT () IO ()) -> ContT () IO ()
 for_in' xs f = mapM_ f xs
 
-for_in'_specific :: [a] -> (a -> ContT () IO ()) -> ContT () IO ()
-for_in'_specific = flip mapM_
-
-for_in'' :: (MonadCont m) => [a] -> (a -> m ()) -> m ()
+-- Of course, sample code, f has the type Label m -> a -> m (), so this
+-- won't do! Consider the following transformation.
+-- This function does the same thing as for_in', but we placed it inside
+-- the continuation monad and made explicit a variable c. What does the
+-- current continuation c correspond to in this context? Well, it's in the
+-- very outer context, which means the "current continuation" is completely
+-- out of the loop. That must mean it's the break continuation. Cool.
+for_in'' :: [a] -> (a -> ContT () IO ()) -> ContT () IO ()
 for_in'' xs f = callCC $ \c -> mapM_ f xs
 
-for_in''_specific :: [a] -> (a -> ContT () IO ()) -> ContT () IO ()
-for_in''_specific xs f = callCC $ \c -> mapM_ f xs
-
-for_in''' :: (MonadCont m) => [a] -> (a -> m ()) -> m ()
+-- Consider this second alternative transformation.
+-- This time, we've replaced f with a wrapper lambda that uses callCC
+-- before actually calling f, and the current continuation results in the
+-- next step of mapM_ being called. This is the continue continuation.
+for_in''' :: [a] -> (a -> ContT () IO ()) -> ContT () IO ()
 for_in''' xs f = mapM_ (\x -> callCC $ \c -> f x) xs
 
-for_in'''_specific :: [a] -> (a -> ContT () IO ()) -> ContT () IO ()
-for_in'''_specific xs f = mapM_ (\x -> callCC $ \c -> f x) xs
-
-for_in_specific :: [a] -> (Label' -> a -> ContT () IO ()) -> ContT () IO ()
-for_in_specific xs f = callCC $ \breakCont ->
+-- Now all we have to do is to stick them together using the label data
+-- type.
+for_in :: [a] -> (Label -> a -> ContT () IO ()) -> ContT () IO ()
+for_in xs f = callCC $ \breakCont ->
     forM_ xs $ \x ->
         callCC $ \continueCont ->
-            let label = Label' (continueCont ()) (breakCont ())
+            let label = Label (continueCont ()) (breakCont ())
             in f label x
-
-for_in :: (MonadCont m) => [a] -> (Label m -> a -> m ()) -> m ()
-for_in xs f = callCC $ \breakCont ->
-    mapM_ (\x -> callCC $ \continueCont -> f (Label (continueCont ()) (breakCont ())) x) xs
-
 
 main :: IO ()
 main = do
@@ -138,4 +144,3 @@ main = do
         print $ runCont (factRealCont 10) (const "hello")
         -- runContT loopBreakForIt return
         runContT loopBreakOuter return
-        runContT loopBreakOuter_specific return
