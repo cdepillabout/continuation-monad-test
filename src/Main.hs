@@ -239,7 +239,7 @@ one = True
 zero = False
 
 power :: Word8
-power = 5
+power = 3
 
 totalDepth :: Word8
 totalDepth = 2 ^ power
