@@ -229,6 +229,11 @@ data Tree = Node { _nodeVal :: Binary
                  , _leafVal :: Word8 }
           deriving Show
 
+----------------------------------------------------------------------------
+-- trying to derive trees to lead to a node
+-- http://datagenetics.com/blog/december12014/index.html
+----------------------------------------------------------------------------
+
 one, zero :: Binary
 one = True
 zero = False
