@@ -234,7 +234,7 @@ one = True
 zero = False
 
 power :: Word8
-power = 2
+power = 5
 
 totalDepth :: Word8
 totalDepth = 2 ^ power
@@ -287,6 +287,44 @@ leafValues (Node _ _ leftTree rightTree) =
         leafValues leftTree ++ leafValues rightTree
 leafValues (Leaf _ leafVal) = [leafVal]
 
+allBoards :: [[Binary]]
+allBoards = replicateM (fromIntegral totalDepth) [False, True]
+
+flipBit :: [Binary] -> Word8 -> [Binary]
+flipBit binaries bitNum =
+        take bitNum' binaries ++ [not (binaries !! bitNum')] ++ drop (bitNum' + 1) binaries
+  where
+    bitNum' = fromIntegral bitNum
+
+allPathsLeadToZero :: Root -> Bool
+allPathsLeadToZero root = all id $ map (\board -> searchForPathToZero root board) allBoards
+
+searchForPathToZero :: Root -> [Binary] -> Bool
+searchForPathToZero root board =
+        if pathValue root board == 0
+            then True
+            else searchForPathToZero' root board 0
+  where
+    searchForPathToZero' :: Root -> [Binary] -> Word8 -> Bool
+    searchForPathToZero' root board depth
+        | depth == totalDepth                       = False
+        | pathValue root board                 == 0 = True
+        | pathValue root (flipBit board depth) == 0 = True
+        | otherwise =
+            searchForPathToZero' root board (depth + 1)
+
+pathValue :: Root -> [Binary] -> Word8
+pathValue (Root ltree rtree) bins =
+        if head bins
+            then pathValueTree ltree (tail bins)
+            else pathValueTree rtree (tail bins)
+  where
+    pathValueTree :: Tree -> [Binary] -> Word8
+    pathValueTree (Node val _ leftTree rightTree) (b:binaries) =
+        if b
+            then pathValueTree leftTree binaries
+            else pathValueTree rightTree binaries
+    pathValueTree (Leaf _ leafVal) _ = leafVal
 
 main :: IO ()
 main = do
@@ -304,7 +342,7 @@ main = do
         runContT loopBreakOuter return
         print $ whatsYourName "myname"
         print $ whatsYourName ""
-        let (Root left right) = createTree
+        let root@(Root left right) = createTree
         -- print "left"
         -- printRight $ left
         -- print "leftTree left"
@@ -315,8 +353,17 @@ main = do
         -- printRight $ _leftTree $ _leftTree $ _leftTree left
         -- print "_rightTree $ _leftTree $ _rightTree left"
         -- printRight $ _rightTree $ _leftTree $ _rightTree left
-        print "leafvalues left"
-        print $ leafValues left
+        -- print "leafvalues left"
+        -- print $ leafValues left
         -- putStrLn $ groom left
+        -- print "pathValue root ..."
+        -- print $ pathValue root [True, True, False, False]
+        -- print $ pathValue root [False, False, False, False, False, False, False, False]
+        -- print "groom allBoards"
+        -- putStrLn $ groom allBoards
+        -- print "searchForPathToZero root ..."
+        -- print $ searchForPathToZero root [False, False, False, False]
+        -- print $ searchForPathToZero root [False, False, False, False, False, False, False, False]
+        putStrLn $ "all paths lead to zero: " ++ show (allPathsLeadToZero root)
         return ()
 
