@@ -3,7 +3,10 @@
 module Main where
 
 import Control.Monad.Cont
+import Data.Word
+import Debug.Trace
 import Prelude hiding (break)
+import Text.Groom
 
 ------------------------------------------------------------------------------
 -- fibonacci with continuations
@@ -213,7 +216,77 @@ callCC''''' exitContFunc = cont normalFunction
         inner :: a -> Cont r b
         inner a = cont $ \_ -> finalChanger a
 
--- callCC'' = \c ->
+type Binary = Bool
+
+data Root = Root Tree Tree
+
+data Tree = Node { _nodeVal :: Binary
+                 , _depth :: Word8
+                 , _leftTree :: Tree
+                 , _rightTree :: Tree
+                 }
+          | Leaf { _nodeVal :: Binary
+                 , _leafVal :: Word8 }
+          deriving Show
+
+one, zero :: Binary
+one = True
+zero = False
+
+power :: Word8
+power = 2
+
+totalDepth :: Word8
+totalDepth = 2 ^ power
+
+createTree :: Root
+createTree = fixLeafValues $ Root (createSubTree one 0) (createSubTree zero 0)
+  where
+    createSubTree :: Binary -> Word8 -> Tree
+    createSubTree val depth =
+        if depth == (totalDepth - 1)
+            then (Leaf val undefined)
+            else Node val depth
+                    (createSubTree one (depth + 1))
+                    (createSubTree zero (depth + 1))
+
+fixLeafValues :: Root -> Root
+fixLeafValues (Root leftTree rightTree) =
+        Root (fixLeafValues' leftTree []) (fixLeafValues' rightTree [])
+  where
+    fixLeafValues' :: Tree -> [Binary] -> Tree
+    fixLeafValues' (Node nodeVal depth leftTree rightTree) binaries =
+        if depth >= power
+            then
+                Node nodeVal
+                     depth
+                     (fixLeafValues' leftTree (nodeVal:binaries))
+                     (fixLeafValues' rightTree (nodeVal:binaries))
+            else
+                Node nodeVal depth (fixLeafValues' leftTree []) (fixLeafValues' rightTree [])
+    fixLeafValues' (Leaf nodeVal _) binaries =
+        Leaf nodeVal (computeLeafVal nodeVal (reverse binaries) (power - 1) 0)
+
+    computeLeafVal :: Binary -> [Binary] -> Word8 -> Word8 -> Word8
+    computeLeafVal leafNodeVal [] _ accum = accum + if leafNodeVal then 1 else 0
+    computeLeafVal leafNodeVal (b:binaries) pow accum =
+        if b
+            then computeLeafVal leafNodeVal binaries (pow - 1) (accum + 2 ^ pow)
+            else computeLeafVal leafNodeVal binaries (pow - 1) accum
+
+printRight :: Tree -> IO ()
+printRight (Node val depth _ rightTree) = do
+        print val
+        printRight rightTree
+printRight (Leaf val leaf) = do
+        print val
+        print $ "(" ++ show leaf ++ ")"
+
+leafValues :: Tree -> [Word8]
+leafValues (Node _ _ leftTree rightTree) =
+        leafValues leftTree ++ leafValues rightTree
+leafValues (Leaf _ leafVal) = [leafVal]
+
 
 main :: IO ()
 main = do
@@ -231,3 +304,19 @@ main = do
         runContT loopBreakOuter return
         print $ whatsYourName "myname"
         print $ whatsYourName ""
+        let (Root left right) = createTree
+        -- print "left"
+        -- printRight $ left
+        -- print "leftTree left"
+        -- printRight $ _leftTree left
+        -- print "_leftTree $ _leftTree left"
+        -- printRight $ _leftTree $ _leftTree left
+        -- print "_leftTree $ _leftTree $ _leftTree left"
+        -- printRight $ _leftTree $ _leftTree $ _leftTree left
+        -- print "_rightTree $ _leftTree $ _rightTree left"
+        -- printRight $ _rightTree $ _leftTree $ _rightTree left
+        print "leafvalues left"
+        print $ leafValues left
+        -- putStrLn $ groom left
+        return ()
+
