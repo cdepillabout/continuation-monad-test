@@ -1,8 +1,10 @@
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE RankNTypes #-}
 
 module Main where
 
 import Control.Monad.Cont
+import Data.Functor.Identity
 import Data.Word
 import Debug.Trace
 import Prelude hiding (break)
@@ -166,7 +168,8 @@ whatsYourName name =
             -- using callCC over return. We pass the continuation to
             -- validateName, and ***interrupt execution of the Cont block
             -- from inside of validateName***.
-            validateName name exit
+            --validateName name exit
+            if null name then exit "You forgot to tell me your name!" else return ()
             -- Returns the welcome message from the callCC block.
             -- This line is not executed if validateName fails.
             return $ "Welcome, " ++ name ++ "!"
@@ -208,13 +211,228 @@ callCC'''' exitContFunc = cont normalFunction
                 throwAwayResultFunc _ = finalChanger a
 
 callCC''''' :: forall a b r . ((a -> Cont r b) -> Cont r a) -> Cont r a
-callCC''''' exitContFunc = cont normalFunction
+callCC''''' exitContFunc = cont' normalFunction
   where
     normalFunction :: (a -> r) -> r
     normalFunction finalChanger = runCont (exitContFunc inner) finalChanger
       where
         inner :: a -> Cont r b
-        inner a = cont $ \_ -> finalChanger a
+        inner a = cont' $ \_ -> finalChanger a
+
+callCC'''''' :: forall a b r . ((a -> Cont r b) -> Cont r a) -> Cont r a
+callCC'''''' exitContFunc = cont' (normalFunction exitContFunc)
+  where
+    normalFunction :: ((a -> Cont r b) -> Cont r a)
+                   -> (a -> r)
+                   -> r
+    normalFunction exitContFunc finalChanger =
+        runCont (exitContFunc (inner finalChanger)) finalChanger
+      where
+        inner :: (a -> r)
+              -> a
+              -> Cont r b
+        inner finalChanger a = cont' $ \_ -> finalChanger a
+
+cont' :: ((a -> r) -> r) -> Cont r a
+cont' f = ContT (wrappedFunction f)
+  where
+    wrappedFunction :: ((a -> r) -> r)
+                    -> (a -> Identity r)
+                    -> Identity r
+    wrappedFunction f k = Identity (f (runIdentity . k))
+
+runCont' :: Cont r a -- The continuation computation
+         -> (a -> r) -- The final continuation that produces the final result.
+         -> r        -- The final result
+runCont' continuation k = runIdentity (runContT continuation (Identity . k))
+
+runCont'' :: forall a r . Cont r a -- The continuation computation
+          -> (a -> r) -- The final continuation that produces the final result.
+          -> r        -- The final result
+runCont'' continuation k = runIdentity outer
+  where
+    outer :: Identity r
+    outer = runContT continuation inner
+      where
+        inner :: a -> Identity r
+        inner = Identity . k
+
+printSomeStuff :: IO ()
+printSomeStuff = flip runContT return $ do
+    lift $ putStrLn "alpha"
+    (l, num) <- callCC $ \k -> let f x = k (f, x)
+                               in return (f, 0)
+    lift $ putStrLn "beta"
+    lift $ putStrLn "gamma"
+    if num < 5
+        then l (num + 1) >> return ()
+        else lift $ print num
+
+printSomeStuff' :: IO ()
+printSomeStuff' = flip runContT return $ do
+    lift $ putStrLn "alpha"
+    (l, num) <- callCC calledFunc
+    lift $ putStrLn "beta"
+    lift $ putStrLn "gamma"
+    if num < 5
+        then l (num + 1) >> return ()
+        else lift $ print num
+  where
+    calledFunc :: (
+                       (Integer -> ContT r IO b, Integer)
+                    -> ContT r IO b
+                  )
+               -> ContT r IO (Integer -> ContT r IO b, Integer)
+    calledFunc k = do
+        lift $ putStrLn "Starting calledFunc!"
+        let f x = k (f, x)
+        lift $ putStrLn "Ending calledFunc!"
+        return (f, 0)
+
+
+----------------------------------------------------------------------------
+-- another call/cc walkthrough
+----------------------------------------------------------------------------
+
+-- ContT can be an incredibly confusing monad to work in, but I've found that
+-- Haskell's equational reasoning is a powerful tool for disentangling it. The
+-- remainder of this answer examines the original example in several steps, each
+-- powered by syntactic transforms and pure renamings.
+
+-- So, let's first examine the type of the callCC part—it's ultimately the heart
+-- of this entire piece of code. That chunk is responsible for generating a
+-- strange kind of tuple as its monadic value.
+
+type Continuation a = ContT () IO a
+type ContinuationAndPreviousInt = (Int -> Continuation (), Int)
+
+getContinuationAndPreviousInt :: Continuation ContinuationAndPreviousInt
+getContinuationAndPreviousInt =
+    callCC $ \k -> let f x = k (f, x)
+                    in return (f, 0)
+
+-- This can be made a little bit more familiar by sectioning it with (>>=), which
+-- is exactly how it would be used in a real context—any do-block desugaring will
+-- create the (>>=) for us eventually.
+
+withContinuationAndPreviousInt :: (ContinuationAndPreviousInt -> Continuation ())
+                               -> ExM ()
+withContinuationAndPreviousInt go =
+     getContinuationAndPreviousInt >>= go
+
+-- and finally we can examine that it actually looks like in the call site. To be
+-- more clear, I'll desugar the original example a little bit
+
+printSomeStuff'' :: IO ()
+printSomeStuff'' =
+    flip runContT return $ do
+        lift (putStrLn "alpha")
+        withContinuationAndPreviousInt $ \(k, num) -> do
+            lift $ putStrLn "beta"
+            lift $ putStrLn "gamma"
+            if num < 5
+              then k (num + 1) >> return ()
+              else lift $ print num
+
+printSomeStuff''' :: IO ()
+printSomeStuff''' =
+    flip runContT return $ do
+        lift (putStrLn "alpha")
+        withContinuationAndPreviousInt myFunc
+  where
+    myFunc :: ContinuationAndPreviousInt -> Continuation ()
+    myFunc (k, num) = do
+        lift $ putStrLn "beta"
+        lift $ putStrLn "gamma"
+        if num < 5
+          then k (num + 1) >> return ()
+          else lift $ print num
+
+-- Notice that this is a purely syntactic transformation. The code is identical to
+-- the original example, but it highlights the existence of this indented block
+-- under withContAndPrev. This is the secret to understanding Haskell
+-- callCC---withContinuationAndPreviousInt is given access to the entire "rest
+-- of the do block" which it gets to choose how to use.
+
+-- Let's ignore the actual implementation of withContAndPrev and just see if we
+-- can create the behavior we saw in running the example. It's fairly tricky, but
+-- what we want to do is pass into the block the ability to call itself. Haskell
+-- being as lazy and recursive as it is, we can write that directly.
+
+withContinuationAndPreviousInt' :: (ContinuationAndPreviousInt -> Continuation ())
+                                -> ExM ()
+withContAndPrev' = go 0 where
+  go n next = next (\i -> go i next, n)
+
+-- This is still something of a recursive headache, but it might be easier to see
+-- how it works. We're taking the remainder of the do block and creating a looping
+-- construct called go. We pass into the block a function that calls our looper,
+-- go, with a new integer argument and returns the prior one.
+
+-- We can begin to unroll this code a bit by making a few more syntactic changes
+-- to the original code.
+
+maybeCont :: ContAndPrev -> ExM ()
+maybeCont k n | n < 5     = k (num + 1)
+              | otherwise = lift (print n)
+
+bg :: ExM ()
+bg = lift $ putStrLn "beta" >> putStrLn "gamma"
+
+flip runContT return $ do
+  lift (putStrLn "alpha")
+  withContAndPrev' $ \(k, num) -> bg >> maybeCont k num
+
+-- And now we can examine what this looks like when betaGam >> maybeCont k num
+-- gets passed into withContAndPrev.
+
+let go n next = next (\i -> go i next, n)
+    next      = \(k, num) -> bg >> maybeCont k num
+in
+  go 0 next
+  (\(k, num) -> betaGam >> maybeCont k num) (\i -> go i next, 0)
+  bg >> maybeCont (\i -> go i next) 0
+  bg >> (\(k, num) -> betaGam >> maybeCont k num) (\i -> go i next, 1)
+  bg >> bg >> maybeCont (\i -> go i next) 1
+  bg >> bg >> (\(k, num) -> betaGam >> maybeCont k num) (\i -> go i next, 2)
+  bg >> bg >> bg >> maybeCont (\i -> go i next) 2
+  bg >> bg >> bg >> bg >> maybeCont (\i -> go i next) 3
+  bg >> bg >> bg >> bg >> bg >> maybeCont (\i -> go i next) 4
+  bg >> bg >> bg >> bg >> bg >> bg >> maybeCont (\i -> go i next) 5
+  bg >> bg >> bg >> bg >> bg >> bg >> lift (print 5)
+
+-- So clearly our fake implementation recreates the behavior of the original loop.
+-- It might be slightly more clear how our fake behavior achieves that by tying a
+-- recursive knot using the "rest of the do block" which it receives as an
+-- argument.
+
+-- Armed with this knowledge, we can take a closer look at callCC. We'll again
+-- profit by initially examining it in its pre-bound form. It's extremely simple,
+-- if weird, in this form.
+
+withCC gen block = callCC gen >>= block
+withCC gen block = block (gen block)
+
+-- In other words, we use the argument to callCC, gen, to generate the return
+-- value of callCC, but we pass into gen the very continuation block that we end
+-- up applying the value to. It's recursively trippy, but denotationally
+-- clear—callCC is truly "call this block with the current continuation".
+
+withCC (\k -> let f x = k (f, x)
+              in  return (f, 0)) next
+next (let f x = next (f, x) in return (f, 0))
+
+-- The actual implementation details of callCC are a bit more challenging since
+-- they require that we find a way to define callCC from the semantics of (callCC
+-- >>=) but that's mostly ignorable. At the end of the day, we profit from the
+-- fact that do blocks are written so that each line gets the remainder of the
+-- block bound to it with (>>=) which provides a natural notion of continuation
+-- immediately.
+
+----------------------------------------------------------------------------
+-- trying to derive trees to lead to a node
+-- http://datagenetics.com/blog/december12014/index.html
+----------------------------------------------------------------------------
 
 type Binary = Bool
 
@@ -228,11 +446,6 @@ data Tree = Node { _nodeVal :: Binary
           | Leaf { _nodeVal :: Binary
                  , _leafVal :: Word8 }
           deriving Show
-
-----------------------------------------------------------------------------
--- trying to derive trees to lead to a node
--- http://datagenetics.com/blog/december12014/index.html
-----------------------------------------------------------------------------
 
 one, zero :: Binary
 one = True
@@ -302,13 +515,12 @@ flipBit binaries bitNum =
     bitNum' = fromIntegral bitNum
 
 allPathsLeadToZero :: Root -> Bool
-allPathsLeadToZero root = all id $ map (\board -> searchForPathToZero root board) allBoards
+allPathsLeadToZero root = all (searchForPathToZero root) allBoards
 
 searchForPathToZero :: Root -> [Binary] -> Bool
-searchForPathToZero root board =
-        if pathValue root board == 0
-            then True
-            else searchForPathToZero' root board 0
+searchForPathToZero root board
+        | pathValue root board == 0 = True
+        | otherwise                 = searchForPathToZero' root board 0
   where
     searchForPathToZero' :: Root -> [Binary] -> Word8 -> Bool
     searchForPathToZero' root board depth
@@ -369,6 +581,7 @@ main = do
         -- print "searchForPathToZero root ..."
         -- print $ searchForPathToZero root [False, False, False, False]
         -- print $ searchForPathToZero root [False, False, False, False, False, False, False, False]
-        putStrLn $ "all paths lead to zero: " ++ show (allPathsLeadToZero root)
+        --putStrLn $ "all paths lead to zero: " ++ show (allPathsLeadToZero root)
+        printSomeStuff'
         return ()
 
