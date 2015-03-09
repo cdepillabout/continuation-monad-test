@@ -257,6 +257,11 @@ runCont'' continuation k = runIdentity outer
         inner :: a -> Identity r
         inner = Identity . k
 
+print :: IO()
+print = do
+    wefwfew
+    where
+
 printSomeStuff :: IO ()
 printSomeStuff = flip runContT return $ do
     lift $ putStrLn "alpha"
@@ -316,7 +321,7 @@ getContinuationAndPreviousInt =
 -- create the (>>=) for us eventually.
 
 withContinuationAndPreviousInt :: (ContinuationAndPreviousInt -> Continuation ())
-                               -> ExM ()
+                               -> Continuation ()
 withContinuationAndPreviousInt go =
      getContinuationAndPreviousInt >>= go
 
@@ -360,9 +365,13 @@ printSomeStuff''' =
 -- being as lazy and recursive as it is, we can write that directly.
 
 withContinuationAndPreviousInt' :: (ContinuationAndPreviousInt -> Continuation ())
-                                -> ExM ()
-withContAndPrev' = go 0 where
-  go n next = next (\i -> go i next, n)
+                                -> Continuation ()
+withContAndPrev' f = go 0 f
+  where
+    go :: Int
+       -> (ContinuationAndPreviousInt -> Continuation ())
+       -> Continuation ()
+    go n next = next (\i -> go i next, n)
 
 -- This is still something of a recursive headache, but it might be easier to see
 -- how it works. We're taking the remainder of the do block and creating a looping
@@ -372,34 +381,45 @@ withContAndPrev' = go 0 where
 -- We can begin to unroll this code a bit by making a few more syntactic changes
 -- to the original code.
 
-maybeCont :: ContAndPrev -> ExM ()
+maybeCont :: ContinuationAndPreviousInt -> Continuation ()
 maybeCont k n | n < 5     = k (num + 1)
               | otherwise = lift (print n)
 
-bg :: ExM ()
-bg = lift $ putStrLn "beta" >> putStrLn "gamma"
+betaGamma :: Continuation ()
+betaGamma = lift $ putStrLn "beta" >> putStrLn "gamma"
 
-flip runContT return $ do
-  lift (putStrLn "alpha")
-  withContAndPrev' $ \(k, num) -> bg >> maybeCont k num
+printSomeStuff'''' :: IO ()
+printSomeStuff'''' =
+    flip runContT return $ do
+        lift (putStrLn "alpha")
+        withContAndPrev' $ \(k, num) -> betaGamma >> maybeCont k num
+
+printSomeStuff''''' :: IO ()
+printSomeStuff''''' =
+    flip runContT return $ do
+        lift (putStrLn "alpha")
+        withContAndPrev' myFunc
+  where
+    myFunc :: ContinuationAndPreviousInt -> Continuation ()
+    myFunc (k, num) = betaGamma >> maybeCont k num
 
 -- And now we can examine what this looks like when betaGam >> maybeCont k num
 -- gets passed into withContAndPrev.
 
-let go n next = next (\i -> go i next, n)
-    next      = \(k, num) -> bg >> maybeCont k num
-in
-  go 0 next
-  (\(k, num) -> betaGam >> maybeCont k num) (\i -> go i next, 0)
-  bg >> maybeCont (\i -> go i next) 0
-  bg >> (\(k, num) -> betaGam >> maybeCont k num) (\i -> go i next, 1)
-  bg >> bg >> maybeCont (\i -> go i next) 1
-  bg >> bg >> (\(k, num) -> betaGam >> maybeCont k num) (\i -> go i next, 2)
-  bg >> bg >> bg >> maybeCont (\i -> go i next) 2
-  bg >> bg >> bg >> bg >> maybeCont (\i -> go i next) 3
-  bg >> bg >> bg >> bg >> bg >> maybeCont (\i -> go i next) 4
-  bg >> bg >> bg >> bg >> bg >> bg >> maybeCont (\i -> go i next) 5
-  bg >> bg >> bg >> bg >> bg >> bg >> lift (print 5)
+-- let go n next = next (\i -> go i next, n)
+--     next      = \(k, num) -> betaGamma >> maybeCont k num
+-- in
+--   go 0 next
+--   (\(k, num) -> betaGam >> maybeCont k num) (\i -> go i next, 0)
+--   betaGamma >> maybeCont (\i -> go i next) 0
+--   betaGamma >> (\(k, num) -> betaGam >> maybeCont k num) (\i -> go i next, 1)
+--   betaGamma >> betaGamma >> maybeCont (\i -> go i next) 1
+--   betaGamma >> betaGamma >> (\(k, num) -> betaGam >> maybeCont k num) (\i -> go i next, 2)
+--   betaGamma >> betaGamma >> betaGamma >> maybeCont (\i -> go i next) 2
+--   betaGamma >> betaGamma >> betaGamma >> betaGamma >> maybeCont (\i -> go i next) 3
+--   betaGamma >> betaGamma >> betaGamma >> betaGamma >> betaGamma >> maybeCont (\i -> go i next) 4
+--   betaGamma >> betaGamma >> betaGamma >> betaGamma >> betaGamma >> betaGamma >> maybeCont (\i -> go i next) 5
+--   betaGamma >> betaGamma >> betaGamma >> betaGamma >> betaGamma >> betaGamma >> lift (print 5)
 
 -- So clearly our fake implementation recreates the behavior of the original loop.
 -- It might be slightly more clear how our fake behavior achieves that by tying a
@@ -410,17 +430,17 @@ in
 -- profit by initially examining it in its pre-bound form. It's extremely simple,
 -- if weird, in this form.
 
-withCC gen block = callCC gen >>= block
-withCC gen block = block (gen block)
+-- withCC gen block = callCC gen >>= block
+-- withCC gen block = block (gen block)
 
 -- In other words, we use the argument to callCC, gen, to generate the return
 -- value of callCC, but we pass into gen the very continuation block that we end
 -- up applying the value to. It's recursively trippy, but denotationally
 -- clear—callCC is truly "call this block with the current continuation".
 
-withCC (\k -> let f x = k (f, x)
-              in  return (f, 0)) next
-next (let f x = next (f, x) in return (f, 0))
+-- withCC (\k -> let f x = k (f, x)
+--               in  return (f, 0)) next
+-- next (let f x = next (f, x) in return (f, 0))
 
 -- The actual implementation details of callCC are a bit more challenging since
 -- they require that we find a way to define callCC from the semantics of (callCC
